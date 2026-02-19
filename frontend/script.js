@@ -24,6 +24,10 @@ function normalizeErrorMessage(message) {
     return "Gemini quota exceeded for your API key/project. Check Google AI Studio quota or billing, then retry.";
   }
 
+  if (/blocking requests from your ip|blocked transcript requests|youtube blocked transcript requests/i.test(text)) {
+    return "YouTube blocked transcript requests from the server IP. This is common on cloud hosting. Use a transcript proxy (Webshare) in Render environment variables or run backend locally.";
+  }
+
   if (text.length > 280) {
     return `${text.slice(0, 280)}...`;
   }

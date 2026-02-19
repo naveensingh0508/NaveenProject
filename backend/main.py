@@ -15,11 +15,15 @@ from fastapi.staticfiles import StaticFiles
 from google import genai
 from pydantic import BaseModel, HttpUrl
 from youtube_transcript_api import (
+    CouldNotRetrieveTranscript,
+    IpBlocked,
     NoTranscriptFound,
+    RequestBlocked,
     TranscriptsDisabled,
     VideoUnavailable,
     YouTubeTranscriptApi,
 )
+from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
 
 
 def get_int_env(name: str, default: int) -> int:
@@ -48,6 +52,12 @@ TRANSCRIPT_CHUNK_SIZE = 12000
 TRANSCRIPT_CHUNK_OVERLAP = 500
 TRANSCRIPT_MAX_CHUNKS = 8
 SUMMARY_MODEL = ""
+WEBSHARE_PROXY_USERNAME = ""
+WEBSHARE_PROXY_PASSWORD = ""
+WEBSHARE_PROXY_LOCATIONS = ""
+YT_PROXY_HTTP_URL = ""
+YT_PROXY_HTTPS_URL = ""
+YT_PROXY_RETRIES = 10
 
 api_key = ""
 client: Optional[genai.Client] = None
@@ -64,6 +74,12 @@ def reload_runtime_config() -> None:
     global TRANSCRIPT_CHUNK_OVERLAP
     global TRANSCRIPT_MAX_CHUNKS
     global SUMMARY_MODEL
+    global WEBSHARE_PROXY_USERNAME
+    global WEBSHARE_PROXY_PASSWORD
+    global WEBSHARE_PROXY_LOCATIONS
+    global YT_PROXY_HTTP_URL
+    global YT_PROXY_HTTPS_URL
+    global YT_PROXY_RETRIES
     global api_key
     global client
 
@@ -80,6 +96,12 @@ def reload_runtime_config() -> None:
     TRANSCRIPT_CHUNK_OVERLAP = get_int_env("TRANSCRIPT_CHUNK_OVERLAP", 500)
     TRANSCRIPT_MAX_CHUNKS = get_int_env("TRANSCRIPT_MAX_CHUNKS", 8)
     SUMMARY_MODEL = GEMINI_SUMMARY_MODEL or GEMINI_MODEL
+    WEBSHARE_PROXY_USERNAME = os.getenv("WEBSHARE_PROXY_USERNAME", "").strip()
+    WEBSHARE_PROXY_PASSWORD = os.getenv("WEBSHARE_PROXY_PASSWORD", "").strip()
+    WEBSHARE_PROXY_LOCATIONS = os.getenv("WEBSHARE_PROXY_LOCATIONS", "").strip()
+    YT_PROXY_HTTP_URL = os.getenv("YT_PROXY_HTTP_URL", "").strip()
+    YT_PROXY_HTTPS_URL = os.getenv("YT_PROXY_HTTPS_URL", "").strip()
+    YT_PROXY_RETRIES = get_int_env("YT_PROXY_RETRIES", 10)
 
     new_api_key = GEMINI_API_KEY or GOOGLE_API_KEY
     if new_api_key != api_key:
@@ -115,6 +137,49 @@ def ensure_gemini_ready() -> None:
             500,
             f"GEMINI_API_KEY (or GOOGLE_API_KEY) is not set. Add it in {ENV_PATH}",
         )
+
+
+def _raise_transcript_fetch_error(exc: Exception) -> None:
+    text = str(exc).lower()
+    if isinstance(exc, (IpBlocked, RequestBlocked)) or "blocking requests from your ip" in text:
+        raise HTTPException(
+            502,
+            (
+                "YouTube blocked transcript requests from this server IP "
+                "(common on Render/free cloud hosts). "
+                "Set WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD "
+                "in environment variables, or run backend locally."
+            ),
+        ) from exc
+
+    raise HTTPException(502, f"Failed to fetch transcript: {exc}") from exc
+
+
+def build_youtube_api() -> YouTubeTranscriptApi:
+    if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
+        locations = [
+            location.strip()
+            for location in WEBSHARE_PROXY_LOCATIONS.split(",")
+            if location.strip()
+        ]
+        return YouTubeTranscriptApi(
+            proxy_config=WebshareProxyConfig(
+                proxy_username=WEBSHARE_PROXY_USERNAME,
+                proxy_password=WEBSHARE_PROXY_PASSWORD,
+                filter_ip_locations=locations or None,
+                retries_when_blocked=max(1, YT_PROXY_RETRIES),
+            )
+        )
+
+    if YT_PROXY_HTTP_URL or YT_PROXY_HTTPS_URL:
+        return YouTubeTranscriptApi(
+            proxy_config=GenericProxyConfig(
+                http_url=YT_PROXY_HTTP_URL or None,
+                https_url=YT_PROXY_HTTPS_URL or None,
+            )
+        )
+
+    return YouTubeTranscriptApi()
 
 
 def _normalize_model_name(name: str) -> str:
@@ -408,7 +473,7 @@ def fetch_transcript(video_id: str) -> str:
                 "Transcript not available for this video. Make sure captions are enabled.",
             ) from exc
         except Exception as exc:
-            raise HTTPException(502, f"Failed to fetch transcript: {exc}") from exc
+            _raise_transcript_fetch_error(exc)
         return _join_entries(entries)
 
     if hasattr(YouTubeTranscriptApi, "list_transcripts"):
@@ -420,7 +485,7 @@ def fetch_transcript(video_id: str) -> str:
                 "Transcript not available for this video. Make sure captions are enabled.",
             ) from exc
         except Exception as exc:
-            raise HTTPException(502, f"Failed to fetch transcript: {exc}") from exc
+            _raise_transcript_fetch_error(exc)
 
         transcript = None
         try:
@@ -442,24 +507,39 @@ def fetch_transcript(video_id: str) -> str:
         try:
             entries = transcript.fetch()
         except Exception as exc:
-            raise HTTPException(502, f"Failed to fetch transcript: {exc}") from exc
+            _raise_transcript_fetch_error(exc)
 
         return _join_entries(entries)
 
     try:
-        api = YouTubeTranscriptApi()
+        api = build_youtube_api()
     except Exception as exc:
-        raise HTTPException(502, f"Failed to initialize transcript API: {exc}") from exc
+        raise HTTPException(
+            500,
+            f"Failed to initialize transcript client. Check proxy environment variables. {exc}",
+        ) from exc
 
     try:
         transcript_list = api.list(video_id)
-    except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable) as exc:
+    except (
+        TranscriptsDisabled,
+        NoTranscriptFound,
+        VideoUnavailable,
+    ) as exc:
         raise HTTPException(
             400,
             "Transcript not available for this video. Make sure captions are enabled.",
         ) from exc
+    except CouldNotRetrieveTranscript as exc:
+        text = str(exc).lower()
+        if "blocking requests from your ip" in text:
+            _raise_transcript_fetch_error(exc)
+        raise HTTPException(
+            400,
+            "Could not retrieve transcript for this video. Try another video with open captions.",
+        ) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Failed to fetch transcript: {exc}") from exc
+        _raise_transcript_fetch_error(exc)
 
     transcript = None
     try:
@@ -481,7 +561,7 @@ def fetch_transcript(video_id: str) -> str:
     try:
         entries = transcript.fetch()
     except Exception as exc:
-        raise HTTPException(502, f"Failed to fetch transcript: {exc}") from exc
+        _raise_transcript_fetch_error(exc)
 
     return _join_entries(entries)
 
