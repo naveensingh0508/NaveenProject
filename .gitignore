@@ -1,0 +1,10 @@
+﻿# Environment
+backend/.env
+backend/.venv/
+
+# Database
+backend/notes.db
+
+# Python
+__pycache__/
+*.pyc
