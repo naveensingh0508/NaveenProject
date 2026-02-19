@@ -1,6 +1,7 @@
 ﻿# Environment
 backend/.env
 backend/.venv/
+backend/.git_backup_nested_repo/
 
 # Database
 backend/notes.db
