@@ -1,15 +1,18 @@
 import json
+import hashlib
+import hmac
 import math
 import os
 import re
+import secrets
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from google import genai
@@ -58,6 +61,15 @@ WEBSHARE_PROXY_LOCATIONS = ""
 YT_PROXY_HTTP_URL = ""
 YT_PROXY_HTTPS_URL = ""
 YT_PROXY_RETRIES = 10
+OTP_EXPIRY_MINUTES = 10
+OTP_MAX_ATTEMPTS = 5
+OTP_DEBUG_MODE = True
+SMS_PROVIDER = "twilio"
+OTP_DEFAULT_COUNTRY_CODE = "+91"
+TWILIO_ACCOUNT_SID = ""
+TWILIO_AUTH_TOKEN = ""
+TWILIO_FROM_NUMBER = ""
+TWILIO_MESSAGING_SERVICE_SID = ""
 
 api_key = ""
 client: Optional[genai.Client] = None
@@ -80,6 +92,15 @@ def reload_runtime_config() -> None:
     global YT_PROXY_HTTP_URL
     global YT_PROXY_HTTPS_URL
     global YT_PROXY_RETRIES
+    global OTP_EXPIRY_MINUTES
+    global OTP_MAX_ATTEMPTS
+    global OTP_DEBUG_MODE
+    global SMS_PROVIDER
+    global OTP_DEFAULT_COUNTRY_CODE
+    global TWILIO_ACCOUNT_SID
+    global TWILIO_AUTH_TOKEN
+    global TWILIO_FROM_NUMBER
+    global TWILIO_MESSAGING_SERVICE_SID
     global api_key
     global client
 
@@ -102,6 +123,15 @@ def reload_runtime_config() -> None:
     YT_PROXY_HTTP_URL = os.getenv("YT_PROXY_HTTP_URL", "").strip()
     YT_PROXY_HTTPS_URL = os.getenv("YT_PROXY_HTTPS_URL", "").strip()
     YT_PROXY_RETRIES = get_int_env("YT_PROXY_RETRIES", 10)
+    OTP_EXPIRY_MINUTES = get_int_env("OTP_EXPIRY_MINUTES", 10)
+    OTP_MAX_ATTEMPTS = get_int_env("OTP_MAX_ATTEMPTS", 5)
+    OTP_DEBUG_MODE = os.getenv("OTP_DEBUG_MODE", "true").strip().lower() in {"1", "true", "yes", "on"}
+    SMS_PROVIDER = os.getenv("SMS_PROVIDER", "twilio").strip().lower()
+    OTP_DEFAULT_COUNTRY_CODE = os.getenv("OTP_DEFAULT_COUNTRY_CODE", "+91").strip() or "+91"
+    TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+    TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+    TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "").strip()
+    TWILIO_MESSAGING_SERVICE_SID = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "").strip()
 
     new_api_key = GEMINI_API_KEY or GOOGLE_API_KEY
     if new_api_key != api_key:
@@ -123,11 +153,426 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def disable_dev_cache(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path.lower()
+    if request.method == "GET" and (
+        path == "/" or path.endswith(".html") or path.endswith(".js") or path.endswith(".css")
+    ):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 class GenerateRequest(BaseModel):
     url: HttpUrl
 
 
+class TranslateNotesRequest(BaseModel):
+    notes: Dict[str, Any]
+    target_language: str
+    target_language_name: Optional[str] = None
+
+
+class RegisterRequest(BaseModel):
+    full_name: str
+    mobile_number: str
+    password: str
+
+
+class RequestRegisterOtpRequest(BaseModel):
+    full_name: str
+    mobile_number: str
+    password: str
+
+
+class VerifyRegisterOtpRequest(BaseModel):
+    mobile_number: str
+    otp: str
+
+
+class LoginRequest(BaseModel):
+    mobile_number: str
+    password: str
+
+
 YOUTUBE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{11}$")
+MOBILE_RE = re.compile(r"^[0-9]{10,15}$")
+SESSION_TTL_HOURS = 24 * 7
+OTP_LENGTH = 6
+
+
+def _clean_text(value: str, max_len: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    return text[:max_len]
+
+
+def _normalize_mobile_number(mobile_number: str) -> str:
+    raw = str(mobile_number or "").strip()
+    digits = re.sub(r"\D", "", raw)
+
+    if raw and not raw.startswith("+") and len(digits) == 10:
+        cc_digits = re.sub(r"\D", "", OTP_DEFAULT_COUNTRY_CODE or "")
+        if cc_digits:
+            digits = f"{cc_digits}{digits}"
+
+    if not MOBILE_RE.match(digits):
+        raise HTTPException(
+            400,
+            "Invalid mobile number. Use full format like +919876543210 or a 10-digit local number.",
+        )
+    return f"+{digits}"
+
+
+def _mobile_to_placeholder_email(mobile_number: str) -> str:
+    return f"m{mobile_number.lstrip('+')}@mobile.local"
+
+
+def _hash_password(password: str, salt_hex: Optional[str] = None) -> Dict[str, str]:
+    salt = bytes.fromhex(salt_hex) if salt_hex else secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
+    return {"salt": salt.hex(), "hash": digest.hex()}
+
+
+def _verify_password(password: str, salt_hex: str, password_hash_hex: str) -> bool:
+    computed = _hash_password(password, salt_hex)["hash"]
+    return hmac.compare_digest(computed, password_hash_hex)
+
+
+def _serialize_student(row: sqlite3.Row) -> Dict[str, Any]:
+    return {
+        "id": int(row["id"]),
+        "full_name": str(row["full_name"]),
+        "email": str(row["email"]),
+        "mobile_number": str(row["mobile_number"] or ""),
+        "student_id": str(row["student_id"]),
+        "department": str(row["department"] or ""),
+        "year_level": str(row["year_level"] or ""),
+        "created_at": str(row["created_at"]),
+        "last_login_at": str(row["last_login_at"] or ""),
+    }
+
+
+def _extract_bearer_token(authorization: Optional[str]) -> str:
+    header = str(authorization or "").strip()
+    if not header:
+        raise HTTPException(401, "Missing Authorization header.")
+    if not header.lower().startswith("bearer "):
+        raise HTTPException(401, "Invalid Authorization header format.")
+    token = header[7:].strip()
+    if not token:
+        raise HTTPException(401, "Missing bearer token.")
+    return token
+
+
+def _create_session_token(conn: sqlite3.Connection, student_id: int) -> str:
+    token = secrets.token_urlsafe(32)
+    now_epoch = int(datetime.utcnow().timestamp())
+    expires_epoch = int((datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS)).timestamp())
+    conn.execute(
+        "INSERT INTO sessions (token, student_id, created_at_epoch, expires_at_epoch) VALUES (?, ?, ?, ?)",
+        (token, student_id, now_epoch, expires_epoch),
+    )
+    return token
+
+
+def _student_from_token(authorization: Optional[str] = None) -> Dict[str, Any]:
+    # Authentication completely removed. 
+    # Mocking a global student to satisfy database interactions safely.
+    return {
+        "id": 1,
+        "full_name": "Global User",
+        "email": "global@studykit.local",
+        "mobile_number": "1234567890",
+        "student_id": "GLOBAL001",
+        "department": "General",
+        "year_level": "1",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "last_login_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def _generate_student_code() -> str:
+    return f"STU{datetime.utcnow().strftime('%Y%m%d%H%M%S')}{secrets.randbelow(1000):03d}"
+
+
+def _send_otp_via_twilio(mobile_number: str, otp: str) -> None:
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+        raise HTTPException(
+            500,
+            "Twilio is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in backend/.env.",
+        )
+
+    if not TWILIO_MESSAGING_SERVICE_SID and not TWILIO_FROM_NUMBER:
+        raise HTTPException(
+            500,
+            (
+                "Twilio sender is missing. Set TWILIO_MESSAGING_SERVICE_SID "
+                "or TWILIO_FROM_NUMBER in backend/.env."
+            ),
+        )
+
+    payload = {
+        "To": mobile_number,
+        "Body": (
+            f"Your StudyKit Pro verification code is {otp}. "
+            f"It expires in {max(1, OTP_EXPIRY_MINUTES)} minutes."
+        ),
+    }
+    if TWILIO_MESSAGING_SERVICE_SID:
+        payload["MessagingServiceSid"] = TWILIO_MESSAGING_SERVICE_SID
+    else:
+        payload["From"] = TWILIO_FROM_NUMBER
+
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+    try:
+        response = requests.post(
+            url,
+            data=payload,
+            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Failed to connect to Twilio: {exc}") from exc
+
+    if response.status_code >= 400:
+        detail = ""
+        try:
+            body = response.json()
+            detail = str(body.get("message") or "").strip()
+        except ValueError:
+            detail = response.text.strip()
+        detail = detail[:220]
+        raise HTTPException(
+            502,
+            f"Twilio rejected SMS request: {detail or 'Unknown provider error.'}",
+        )
+
+
+def _deliver_mobile_otp(mobile_number: str, otp: str) -> Optional[str]:
+    # Demo mode shows OTP directly in API response.
+    if OTP_DEBUG_MODE:
+        return otp
+
+    if SMS_PROVIDER == "twilio":
+        _send_otp_via_twilio(mobile_number, otp)
+        return None
+
+    raise HTTPException(
+        500,
+        f"Unsupported SMS_PROVIDER '{SMS_PROVIDER}'. Supported providers: twilio.",
+    )
+
+
+def request_registration_otp(payload: RequestRegisterOtpRequest) -> Dict[str, Any]:
+    reload_runtime_config()
+    full_name = _clean_text(payload.full_name, 120)
+    mobile_number = _normalize_mobile_number(payload.mobile_number)
+    password = str(payload.password or "")
+
+    if len(full_name) < 2:
+        raise HTTPException(400, "Full name must be at least 2 characters.")
+    if len(password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters.")
+
+    now_epoch = int(datetime.utcnow().timestamp())
+    expires_epoch = int((datetime.utcnow() + timedelta(minutes=max(1, OTP_EXPIRY_MINUTES))).timestamp())
+    otp = f"{secrets.randbelow(10**OTP_LENGTH):0{OTP_LENGTH}d}"
+    otp_secret = _hash_password(otp)
+    password_secret = _hash_password(password)
+    otp_preview: Optional[str] = None
+
+    with sqlite3.connect(DB_PATH) as conn:
+        existing_student = conn.execute(
+            "SELECT id FROM students WHERE mobile_number = ?",
+            (mobile_number,),
+        ).fetchone()
+        if existing_student:
+            raise HTTPException(409, "An account with this mobile number already exists.")
+
+        conn.execute("DELETE FROM registration_otps WHERE mobile_number = ?", (mobile_number,))
+        conn.execute(
+            """
+            INSERT INTO registration_otps (
+                mobile_number,
+                full_name,
+                password_salt,
+                password_hash,
+                otp_salt,
+                otp_hash,
+                created_at_epoch,
+                expires_at_epoch,
+                attempts
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+            """,
+            (
+                mobile_number,
+                full_name,
+                password_secret["salt"],
+                password_secret["hash"],
+                otp_secret["salt"],
+                otp_secret["hash"],
+                now_epoch,
+                expires_epoch,
+            ),
+        )
+        otp_preview = _deliver_mobile_otp(mobile_number, otp)
+        conn.commit()
+
+    response: Dict[str, Any] = {
+        "message": f"OTP sent to {mobile_number}. Please verify to complete registration."
+    }
+    if otp_preview:
+        response["otp_preview"] = otp_preview
+    return response
+
+
+def verify_registration_otp_and_register(payload: VerifyRegisterOtpRequest) -> Dict[str, Any]:
+    mobile_number = _normalize_mobile_number(payload.mobile_number)
+    otp = re.sub(r"\D", "", str(payload.otp or "").strip())
+    if len(otp) != OTP_LENGTH:
+        raise HTTPException(400, f"OTP must be {OTP_LENGTH} digits.")
+
+    now_epoch = int(datetime.utcnow().timestamp())
+    created_at = datetime.utcnow().isoformat() + "Z"
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT id, mobile_number, full_name, password_salt, password_hash, otp_salt, otp_hash, expires_at_epoch, attempts
+            FROM registration_otps
+            WHERE mobile_number = ?
+            """,
+            (mobile_number,),
+        ).fetchone()
+
+        if not row:
+            raise HTTPException(400, "No pending registration found. Request OTP again.")
+
+        if int(row["expires_at_epoch"]) <= now_epoch:
+            conn.execute("DELETE FROM registration_otps WHERE id = ?", (int(row["id"]),))
+            conn.commit()
+            raise HTTPException(400, "OTP expired. Request a new OTP.")
+
+        if int(row["attempts"]) >= max(1, OTP_MAX_ATTEMPTS):
+            conn.execute("DELETE FROM registration_otps WHERE id = ?", (int(row["id"]),))
+            conn.commit()
+            raise HTTPException(429, "Too many invalid OTP attempts. Request a new OTP.")
+
+        if not _verify_password(otp, str(row["otp_salt"]), str(row["otp_hash"])):
+            conn.execute(
+                "UPDATE registration_otps SET attempts = attempts + 1 WHERE id = ?",
+                (int(row["id"]),),
+            )
+            conn.commit()
+            raise HTTPException(400, "Invalid OTP.")
+
+        existing_student = conn.execute(
+            "SELECT id FROM students WHERE mobile_number = ?",
+            (mobile_number,),
+        ).fetchone()
+        if existing_student:
+            conn.execute("DELETE FROM registration_otps WHERE id = ?", (int(row["id"]),))
+            conn.commit()
+            raise HTTPException(409, "An account with this mobile number already exists.")
+
+        student_code = _generate_student_code()
+        placeholder_email = _mobile_to_placeholder_email(mobile_number)
+        cursor = conn.execute(
+            """
+            INSERT INTO students (full_name, email, mobile_number, student_id, department, year_level, password_salt, password_hash, created_at, last_login_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(row["full_name"]),
+                placeholder_email,
+                mobile_number,
+                student_code,
+                "",
+                "",
+                str(row["password_salt"]),
+                str(row["password_hash"]),
+                created_at,
+                created_at,
+            ),
+        )
+        student_db_id = int(cursor.lastrowid)
+
+        conn.execute("DELETE FROM registration_otps WHERE id = ?", (int(row["id"]),))
+        token = _create_session_token(conn, student_db_id)
+
+        student_row = conn.execute(
+            "SELECT id, full_name, email, mobile_number, student_id, department, year_level, created_at, last_login_at FROM students WHERE id = ?",
+            (student_db_id,),
+        ).fetchone()
+        conn.commit()
+
+    if not student_row:
+        raise HTTPException(500, "Unable to complete registration.")
+
+    return {"token": token, "student": _serialize_student(student_row)}
+
+
+def register_student(payload: RegisterRequest) -> Dict[str, Any]:
+    full_name = _clean_text(payload.full_name, 120)
+    mobile_number = _normalize_mobile_number(payload.mobile_number)
+    password = str(payload.password or "")
+
+    if len(full_name) < 2:
+        raise HTTPException(400, "Full name must be at least 2 characters.")
+    if len(password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters.")
+
+    created_at = datetime.utcnow().isoformat() + "Z"
+    password_secret = _hash_password(password)
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+
+        existing_student = conn.execute(
+            "SELECT id FROM students WHERE mobile_number = ?",
+            (mobile_number,),
+        ).fetchone()
+        if existing_student:
+            raise HTTPException(409, "An account with this mobile number already exists.")
+
+        student_code = _generate_student_code()
+        placeholder_email = _mobile_to_placeholder_email(mobile_number)
+        cursor = conn.execute(
+            """
+            INSERT INTO students (full_name, email, mobile_number, student_id, department, year_level, password_salt, password_hash, created_at, last_login_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                full_name,
+                placeholder_email,
+                mobile_number,
+                student_code,
+                "",
+                "",
+                password_secret["salt"],
+                password_secret["hash"],
+                created_at,
+                created_at,
+            ),
+        )
+        student_db_id = int(cursor.lastrowid)
+        token = _create_session_token(conn, student_db_id)
+
+        student_row = conn.execute(
+            "SELECT id, full_name, email, mobile_number, student_id, department, year_level, created_at, last_login_at FROM students WHERE id = ?",
+            (student_db_id,),
+        ).fetchone()
+        conn.commit()
+
+    if not student_row:
+        raise HTTPException(500, "Unable to complete registration.")
+
+    return {"token": token, "student": _serialize_student(student_row)}
 
 
 def ensure_gemini_ready() -> None:
@@ -156,6 +601,10 @@ def _raise_transcript_fetch_error(exc: Exception) -> None:
 
 
 def build_youtube_api() -> YouTubeTranscriptApi:
+    http_client = requests.Session()
+    # Ignore machine-level proxy env vars unless an explicit proxy config is provided.
+    http_client.trust_env = False
+
     if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
         locations = [
             location.strip()
@@ -163,6 +612,7 @@ def build_youtube_api() -> YouTubeTranscriptApi:
             if location.strip()
         ]
         return YouTubeTranscriptApi(
+            http_client=http_client,
             proxy_config=WebshareProxyConfig(
                 proxy_username=WEBSHARE_PROXY_USERNAME,
                 proxy_password=WEBSHARE_PROXY_PASSWORD,
@@ -173,13 +623,14 @@ def build_youtube_api() -> YouTubeTranscriptApi:
 
     if YT_PROXY_HTTP_URL or YT_PROXY_HTTPS_URL:
         return YouTubeTranscriptApi(
+            http_client=http_client,
             proxy_config=GenericProxyConfig(
                 http_url=YT_PROXY_HTTP_URL or None,
                 https_url=YT_PROXY_HTTPS_URL or None,
             )
         )
 
-    return YouTubeTranscriptApi()
+    return YouTubeTranscriptApi(http_client=http_client)
 
 
 def _normalize_model_name(name: str) -> str:
@@ -407,6 +858,90 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                full_name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                mobile_number TEXT,
+                student_id TEXT NOT NULL UNIQUE,
+                department TEXT,
+                year_level TEXT,
+                password_salt TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_login_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                student_id INTEGER NOT NULL,
+                created_at_epoch INTEGER NOT NULL,
+                expires_at_epoch INTEGER NOT NULL,
+                FOREIGN KEY(student_id) REFERENCES students(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS registration_otps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mobile_number TEXT NOT NULL UNIQUE,
+                full_name TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                otp_salt TEXT NOT NULL,
+                otp_hash TEXT NOT NULL,
+                created_at_epoch INTEGER NOT NULL,
+                expires_at_epoch INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        # Migration for older DBs created before mobile verification fields.
+        student_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(students)").fetchall()
+        }
+        if "mobile_number" not in student_columns:
+            conn.execute("ALTER TABLE students ADD COLUMN mobile_number TEXT")
+
+        otp_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(registration_otps)").fetchall()
+        }
+        if "mobile_number" not in otp_columns:
+            conn.execute("DROP TABLE IF EXISTS registration_otps")
+            conn.execute(
+                """
+                CREATE TABLE registration_otps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mobile_number TEXT NOT NULL UNIQUE,
+                    full_name TEXT NOT NULL,
+                    password_salt TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    otp_salt TEXT NOT NULL,
+                    otp_hash TEXT NOT NULL,
+                    created_at_epoch INTEGER NOT NULL,
+                    expires_at_epoch INTEGER NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_student_id ON sessions(student_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_students_email ON students(email)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_students_mobile_number ON students(mobile_number)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_registration_otps_mobile_number ON registration_otps(mobile_number)"
+        )
         conn.commit()
 
 
@@ -436,11 +971,14 @@ def extract_video_id(url: str) -> Optional[str]:
 
 def fetch_video_title(url: str) -> str:
     try:
-        response = requests.get(
-            "https://www.youtube.com/oembed",
-            params={"url": url, "format": "json"},
-            timeout=10,
-        )
+        with requests.Session() as session:
+            # Keep title fetch independent from broken system proxy variables.
+            session.trust_env = False
+            response = session.get(
+                "https://www.youtube.com/oembed",
+                params={"url": url, "format": "json"},
+                timeout=10,
+            )
         if response.ok:
             payload = response.json()
             title = payload.get("title")
@@ -568,23 +1106,39 @@ def fetch_transcript(video_id: str) -> str:
 
 def build_prompt(transcript: str) -> str:
     return (
-        "Analyze this YouTube transcript and create a complete study pack.\n"
+        "Analyze this YouTube transcript and create a student-friendly study pack.\n"
+        "Audience: beginners preparing to understand and revise quickly.\n"
         "Requirements:\n"
         "- Break content into clear topics in learning order.\n"
         "- For each topic create:\n"
-        "  1) A full explanation (8-12 sentences, include definitions, context, and at least one example).\n"
-        "  2) 6-10 bullet notes with key points and formulas/terms where relevant.\n"
-        "  3) At least 2 Mermaid diagrams using diagram types that best fit the topic.\n"
+        "  1) 2-4 learning objectives (start with action verbs like Explain, Compare, Apply).\n"
+        "  2) A full explanation written as short teaching blocks, not one long paragraph.\n"
+        "     Use 8-12 short sentences in plain language, define terms, show why it matters, include one concrete example, and separate ideas naturally.\n"
+        "  3) 6-10 bullet notes with key points/formulas where relevant.\n"
+        "  4) 3-6 key terms with short definitions.\n"
+        "  5) 2-4 common mistakes students make and how to avoid them.\n"
+        "  6) 2-4 self-check Q&A items with concise answers.\n"
+        "  7) A quick recap list (3-5 points) for last-minute revision.\n"
+        "  8) At least 2 Mermaid diagrams using diagram types that best fit the topic.\n"
         "     Allowed types: flowchart, sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram, journey, pie, gantt, mindmap, timeline.\n"
-        "  4) 5 MCQ quiz questions, each with 4 options and one correct answer text.\n"
+        "  9) 5 MCQ quiz questions, each with 4 options and one correct answer text.\n"
         "Return ONLY a valid JSON object with this shape:\n"
         "{\n"
         "  \"table_of_contents\": [\"Topic A\", \"Topic B\"],\n"
         "  \"topics\": [\n"
         "    {\n"
         "      \"title\": \"Topic A\",\n"
+        "      \"learning_objectives\": [\"Explain ...\", \"Apply ...\"],\n"
         "      \"explanation\": \"...\",\n"
         "      \"bullet_notes\": [\"...\"],\n"
+        "      \"key_terms\": [\n"
+        "        {\"term\": \"...\", \"definition\": \"...\"}\n"
+        "      ],\n"
+        "      \"common_mistakes\": [\"...\"],\n"
+        "      \"self_check\": [\n"
+        "        {\"question\": \"...\", \"answer\": \"...\"}\n"
+        "      ],\n"
+        "      \"quick_recap\": [\"...\"],\n"
         "      \"diagrams\": [\n"
         "        {\"title\": \"Concept Map\", \"diagram_type\": \"mindmap\", \"mermaid\": \"mindmap\\n  root((Topic))\"},\n"
         "        {\"title\": \"Process\", \"diagram_type\": \"sequenceDiagram\", \"mermaid\": \"sequenceDiagram\\nA->>B: step\"}\n"
@@ -599,6 +1153,9 @@ def build_prompt(transcript: str) -> str:
         "- Output JSON only, no markdown.\n"
         "- table_of_contents must match topic titles.\n"
         "- Ensure explanations are detailed and teaching-oriented, not short summaries.\n"
+        "- Do not write explanation as one dense paragraph. Keep it naturally broken into short readable parts.\n"
+        "- Keep language clear for students (avoid unexplained jargon).\n"
+        "- Keep each list item concise and study-ready.\n"
         "\nTranscript:\n"
         f"{transcript}"
     )
@@ -645,10 +1202,68 @@ def call_gemini(transcript: str) -> Dict[str, Any]:
 
 def ensure_list(value: Any) -> List[str]:
     if isinstance(value, list):
-        return [str(item) for item in value if str(item).strip()]
-    if value is None:
+        items = value
+    elif value is None:
         return []
-    return [str(value)]
+    else:
+        items = [value]
+
+    cleaned: List[str] = []
+    for item in items:
+        text = str(item).strip()
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
+def ensure_term_list(value: Any) -> List[Dict[str, str]]:
+    terms: List[Dict[str, str]] = []
+    if not isinstance(value, list):
+        return terms
+
+    for item in value:
+        if isinstance(item, dict):
+            term = str(item.get("term") or item.get("name") or "").strip()
+            definition = str(
+                item.get("definition") or item.get("meaning") or item.get("explanation") or ""
+            ).strip()
+        else:
+            raw = str(item).strip()
+            if ":" in raw:
+                head, tail = raw.split(":", 1)
+                term = head.strip()
+                definition = tail.strip()
+            else:
+                term = raw
+                definition = ""
+
+        if not term:
+            continue
+
+        terms.append({"term": term, "definition": definition})
+
+    return terms
+
+
+def ensure_qna_list(value: Any) -> List[Dict[str, str]]:
+    qna: List[Dict[str, str]] = []
+    if not isinstance(value, list):
+        return qna
+
+    for item in value:
+        if isinstance(item, dict):
+            question = str(item.get("question") or "").strip()
+            answer = str(item.get("answer") or item.get("expected_answer") or "").strip()
+        else:
+            question = str(item).strip()
+            answer = ""
+
+        if not question:
+            continue
+
+        qna.append({"question": question, "answer": answer})
+
+    return qna
 
 
 def normalize_result(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -662,6 +1277,11 @@ def normalize_result(data: Dict[str, Any]) -> Dict[str, Any]:
         title = str(topic.get("title") or "Untitled Topic").strip()
         explanation = str(topic.get("explanation") or "").strip()
         bullet_notes = ensure_list(topic.get("bullet_notes"))
+        learning_objectives = ensure_list(topic.get("learning_objectives") or topic.get("objectives"))
+        key_terms = ensure_term_list(topic.get("key_terms") or topic.get("glossary"))
+        common_mistakes = ensure_list(topic.get("common_mistakes"))
+        self_check = ensure_qna_list(topic.get("self_check") or topic.get("practice"))
+        quick_recap = ensure_list(topic.get("quick_recap") or topic.get("summary_points"))
 
         diagrams: List[Dict[str, str]] = []
         raw_diagrams = topic.get("diagrams")
@@ -716,8 +1336,13 @@ def normalize_result(data: Dict[str, Any]) -> Dict[str, Any]:
         topics.append(
             {
                 "title": title,
+                "learning_objectives": learning_objectives,
                 "explanation": explanation,
                 "bullet_notes": bullet_notes,
+                "key_terms": key_terms,
+                "common_mistakes": common_mistakes,
+                "self_check": self_check,
+                "quick_recap": quick_recap,
                 "diagram": diagrams[0]["mermaid"] if diagrams else "",
                 "diagrams": diagrams,
                 "quiz": quiz_items,
@@ -729,6 +1354,224 @@ def normalize_result(data: Dict[str, Any]) -> Dict[str, Any]:
         toc = [topic["title"] for topic in topics]
 
     return {"table_of_contents": toc, "topics": topics}
+
+
+def _coerce_language_code(language: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z-]", "", (language or "").strip().lower())
+    return cleaned[:16] or "en"
+
+
+def _coerce_language_name(name: str, fallback_code: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9 \-()]", "", (name or "").strip())
+    return (cleaned[:60] or fallback_code.upper()).strip()
+
+
+def _build_translation_prompt(
+    notes_json: str, target_language_code: str, target_language_name: str
+) -> str:
+    return (
+        "Translate this study notes JSON into the target language.\n"
+        f"Target language: {target_language_name} ({target_language_code}).\n"
+        "Rules:\n"
+        "- Return JSON only.\n"
+        "- Keep all JSON keys exactly the same.\n"
+        "- Keep the same general structure.\n"
+        "- Translate natural language text fields for student readability.\n"
+        "- Do NOT translate Mermaid syntax in diagrams.mermaid.\n"
+        "- Do NOT translate URLs.\n"
+        "- For each quiz item, ensure correct_answer exactly matches one translated option.\n"
+        "- Keep explanations clear and beginner-friendly.\n"
+        "- Preserve short explanation breaks when translating.\n"
+        "Input JSON:\n"
+        f"{notes_json}"
+    )
+
+
+def _preserve_diagrams_from_source(
+    source_notes: Dict[str, Any], translated_notes: Dict[str, Any]
+) -> None:
+    source_topics = source_notes.get("topics") or []
+    translated_topics = translated_notes.get("topics") or []
+    for index, topic in enumerate(translated_topics):
+        if index >= len(source_topics):
+            break
+        source_topic = source_topics[index] if isinstance(source_topics[index], dict) else {}
+        if not isinstance(topic, dict):
+            continue
+        topic["diagrams"] = source_topic.get("diagrams") or []
+        topic["diagram"] = source_topic.get("diagram") or ""
+
+
+def _align_quiz_answers_with_options(
+    source_notes: Dict[str, Any], translated_notes: Dict[str, Any]
+) -> None:
+    source_topics = source_notes.get("topics") or []
+    translated_topics = translated_notes.get("topics") or []
+
+    for topic_index, translated_topic in enumerate(translated_topics):
+        if not isinstance(translated_topic, dict):
+            continue
+        source_topic = (
+            source_topics[topic_index]
+            if topic_index < len(source_topics) and isinstance(source_topics[topic_index], dict)
+            else {}
+        )
+
+        source_quiz = source_topic.get("quiz") or []
+        translated_quiz = translated_topic.get("quiz") or []
+        normalized_quiz: List[Dict[str, Any]] = []
+
+        for quiz_index, translated_item in enumerate(translated_quiz):
+            if not isinstance(translated_item, dict):
+                continue
+
+            options = ensure_list(translated_item.get("options"))
+            while len(options) < 4:
+                options.append(f"Option {len(options) + 1}")
+            options = options[:4]
+
+            translated_correct = str(translated_item.get("correct_answer") or "").strip()
+            if translated_correct in options:
+                resolved_correct = translated_correct
+            else:
+                resolved_correct = ""
+                source_item = (
+                    source_quiz[quiz_index]
+                    if quiz_index < len(source_quiz) and isinstance(source_quiz[quiz_index], dict)
+                    else {}
+                )
+                source_options = ensure_list(source_item.get("options"))
+                source_correct = str(source_item.get("correct_answer") or "").strip()
+                if source_correct and source_correct in source_options:
+                    source_correct_index = source_options.index(source_correct)
+                    if source_correct_index < len(options):
+                        resolved_correct = options[source_correct_index]
+
+                if not resolved_correct and options:
+                    resolved_correct = options[0]
+
+            normalized_quiz.append(
+                {
+                    "question": str(translated_item.get("question") or "").strip(),
+                    "options": options,
+                    "correct_answer": resolved_correct,
+                }
+            )
+
+        translated_topic["quiz"] = normalized_quiz
+
+
+def translate_notes_payload(
+    notes: Dict[str, Any], target_language_code: str, target_language_name: str
+) -> Dict[str, Any]:
+    normalized_source = normalize_result(notes)
+    if target_language_code in {"en", "en-us", "en-gb"}:
+        return normalized_source
+
+    prompt = _build_translation_prompt(
+        json.dumps(normalized_source, ensure_ascii=False),
+        target_language_code,
+        target_language_name,
+    )
+
+    try:
+        response = gemini_generate_with_fallback(
+            preferred_model=GEMINI_MODEL,
+            contents=prompt,
+            response_mime_type="application/json",
+            temperature=0.1,
+            error_prefix="Gemini API error while translating notes",
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(502, f"Gemini API error while translating notes: {exc}") from exc
+
+    raw = (response.text or "").strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        repair_prompt = (
+            "The previous translated output was invalid JSON. "
+            "Return corrected JSON only, with no extra text.\n"
+            f"Invalid output:\n{raw}"
+        )
+        try:
+            response = gemini_generate_with_fallback(
+                preferred_model=GEMINI_MODEL,
+                contents=repair_prompt,
+                response_mime_type="application/json",
+                temperature=0,
+                error_prefix="Gemini API error while repairing translated JSON",
+            )
+            parsed = json.loads((response.text or "").strip())
+        except Exception as exc:
+            raise HTTPException(502, "Failed to parse translated JSON from Gemini output.") from exc
+
+    translated = normalize_result(parsed)
+    _preserve_diagrams_from_source(normalized_source, translated)
+    _align_quiz_answers_with_options(normalized_source, translated)
+    return translated
+
+
+def login_student(payload: LoginRequest) -> Dict[str, Any]:
+    mobile_number = _normalize_mobile_number(payload.mobile_number)
+    password = str(payload.password or "")
+    if not password:
+        raise HTTPException(400, "Password is required.")
+
+    now_iso = datetime.utcnow().isoformat() + "Z"
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+
+        row = conn.execute(
+            """
+            SELECT id, full_name, email, mobile_number, student_id, department, year_level, created_at, last_login_at, password_salt, password_hash
+            FROM students
+            WHERE mobile_number = ?
+            """,
+            (mobile_number,),
+        ).fetchone()
+
+        if not row:
+            raise HTTPException(401, "Invalid mobile number or password.")
+
+        if not _verify_password(password, str(row["password_salt"]), str(row["password_hash"])):
+            raise HTTPException(401, "Invalid mobile number or password.")
+
+        student_db_id = int(row["id"])
+        conn.execute("UPDATE students SET last_login_at = ? WHERE id = ?", (now_iso, student_db_id))
+        conn.execute("DELETE FROM sessions WHERE student_id = ?", (student_db_id,))
+        token = _create_session_token(conn, student_db_id)
+
+        student_row = conn.execute(
+            "SELECT id, full_name, email, mobile_number, student_id, department, year_level, created_at, last_login_at FROM students WHERE id = ?",
+            (student_db_id,),
+        ).fetchone()
+
+        conn.commit()
+
+    if not student_row:
+        raise HTTPException(500, "Unable to load student account.")
+
+    return {"token": token, "student": _serialize_student(student_row)}
+
+
+def list_students(limit: int = 100) -> List[Dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 200))
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, full_name, email, mobile_number, student_id, department, year_level, created_at, last_login_at
+            FROM students
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [_serialize_student(row) for row in rows]
 
 
 def save_result(result: Dict[str, Any]) -> int:
@@ -775,6 +1618,42 @@ def load_history_item(note_id: int) -> Optional[Dict[str, Any]]:
     return result
 
 
+@app.post("/api/auth/register/request-otp")
+def request_register_otp(request: RequestRegisterOtpRequest) -> Dict[str, str]:
+    return request_registration_otp(request)
+
+
+@app.post("/api/auth/register/verify-otp")
+def verify_register_otp(request: VerifyRegisterOtpRequest) -> Dict[str, Any]:
+    return verify_registration_otp_and_register(request)
+
+
+@app.post("/api/auth/register")
+def register_student_account(request: RegisterRequest) -> Dict[str, Any]:
+    return register_student(request)
+
+
+@app.post("/api/auth/login")
+def login_student_account(request: LoginRequest) -> Dict[str, Any]:
+    return login_student(request)
+
+
+@app.get("/api/auth/me")
+def current_student_profile(
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    return _student_from_token(authorization)
+
+
+@app.get("/api/students")
+def students_directory(
+    limit: int = 100,
+    authorization: Optional[str] = Header(default=None),
+) -> List[Dict[str, Any]]:
+    _student_from_token(authorization)
+    return list_students(limit=limit)
+
+
 @app.get("/api/health")
 def health_check() -> Dict[str, str]:
     return {"status": "ok"}
@@ -806,6 +1685,47 @@ def generate_notes(request: GenerateRequest) -> Dict[str, Any]:
 
     record_id = save_result(result)
     result["id"] = record_id
+    return result
+
+
+@app.post("/api/translate")
+def translate_notes(request: TranslateNotesRequest) -> Dict[str, Any]:
+    if not isinstance(request.notes, dict):
+        raise HTTPException(400, "Invalid notes payload.")
+
+    source_notes = request.notes
+    normalized_source = normalize_result(source_notes)
+    if not normalized_source.get("topics"):
+        raise HTTPException(400, "No notes content found to translate.")
+
+    target_language_code = _coerce_language_code(request.target_language)
+    target_language_name = _coerce_language_name(
+        request.target_language_name or "", target_language_code
+    )
+
+    translated = translate_notes_payload(
+        normalized_source, target_language_code, target_language_name
+    )
+
+    created_at = str(source_notes.get("created_at") or "").strip()
+    if not created_at:
+        created_at = datetime.utcnow().isoformat() + "Z"
+
+    result: Dict[str, Any] = {
+        "video_url": str(source_notes.get("video_url") or "").strip(),
+        "video_title": str(source_notes.get("video_title") or "").strip() or "YouTube Video",
+        "created_at": created_at,
+        "language": target_language_code,
+        "language_name": target_language_name,
+        **translated,
+    }
+
+    if "id" in source_notes:
+        try:
+            result["id"] = int(source_notes["id"])
+        except (TypeError, ValueError):
+            pass
+
     return result
 
 

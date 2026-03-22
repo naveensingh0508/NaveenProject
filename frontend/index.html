@@ -1,87 +1,602 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>YouTube Notes Generator</title>
+  <title>StudyKit Pro | Lecture Notes</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css?v=20260322c" />
 </head>
 <body>
-  <div class="app">
-    <header class="hero">
-      <div class="hero-text">
-        <div class="brand-row">
-          <span class="brand-pill">YouTube to Study Kit</span>
-          <span class="brand-tag">AI Study Studio</span>
+  <div class="ambient-layer" aria-hidden="true"></div>
+
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div class="brand-copy">
+          <p class="brand-name">StudyKit Pro</p>
+          <p class="brand-subtitle">Lecture intelligence for focused students</p>
         </div>
-        <h1>
-          Turn any lecture into a
-          <span class="brand-highlight">YouTube to Study Kit</span>
-          with notes, diagrams, and quizzes.
-        </h1>
-        <p class="subhead">
-          Paste a link and get an organized study pack with topics, explanations, visual diagrams, and MCQs.
-        </p>
       </div>
-      <form id="generate-form" class="input-card">
-        <label for="youtube-url">YouTube URL</label>
-        <div class="input-row">
-          <input id="youtube-url" type="url" placeholder="https://www.youtube.com/watch?v=..." required />
-          <button id="generate-btn" type="submit">Generate Notes</button>
-        </div>
-        <div class="input-actions">
-          <button type="button" id="toggle-theme">Toggle Dark Mode</button>
-          <button type="button" id="copy-notes" disabled>Copy Notes</button>
-          <button type="button" id="download-pdf" disabled>Download PDF</button>
-        </div>
-        <p id="status" class="status">Ready when you are.</p>
-      </form>
+      <div class="topbar-actions">
+
+        <button type="button" class="ghost-btn" id="theme-toggle">Use Dark Theme</button>
+      </div>
     </header>
 
-    <main class="layout">
-      <section class="panel results">
-        <div class="section">
-          <h2>Video Title</h2>
-          <p id="video-title" class="value">No video yet.</p>
+    <section id="auth-section" class="auth-section">
+      <article class="auth-card glass-card">
+        <div class="auth-layout">
+          <div class="auth-story">
+            <p class="auth-kicker">Student Notes Platform</p>
+            <h1 class="auth-title">Turn Any Lecture Into Exam-Ready Notes in Seconds.</h1>
+            <p class="auth-copy">
+              StudyKit Pro is designed for students who want clean structure, better explanation flow,
+              multilingual notes, revision-friendly quiz checkpoints, and export-ready learning material
+              without jumping across multiple tools.
+            </p>
+
+            <div class="auth-highlights">
+              <span>Readable Explanations</span>
+              <span>Interactive Quizzes</span>
+              <span>Structured Key Notes</span>
+              <span>Diagram Support</span>
+              <span>Language Switching</span>
+              <span>PDF Export</span>
+            </div>
+
+            <div class="auth-story-grid">
+              <article class="auth-story-card auth-story-card-primary glass-card">
+                <p class="story-card-kicker">What students get</p>
+                <h3>A cleaner reading experience from the first topic to the final revision.</h3>
+                <ul class="story-list">
+                  <li>Open explanation blocks instead of dense paragraphs</li>
+                  <li>Key notes and key terms that are easy to revise</li>
+                  <li>Quiz checkpoints that help students self-check fast</li>
+                </ul>
+              </article>
+
+              <article class="auth-story-card auth-story-card-soft glass-card">
+                <p class="story-card-kicker">Study flow</p>
+                <div class="story-step-list">
+                  <div class="story-step">
+                    <strong>Paste lecture link</strong>
+                    <span>Start from a YouTube class or recorded lecture.</span>
+                  </div>
+                  <div class="story-step">
+                    <strong>Generate polished notes</strong>
+                    <span>Get organized topics, key notes, diagrams, and quizzes.</span>
+                  </div>
+                  <div class="story-step">
+                    <strong>Revise and export</strong>
+                    <span>Switch language, review history, and download the notes as PDF.</span>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="auth-metrics">
+              <article class="auth-metric glass-card">
+                <strong>Focused Layout</strong>
+                <span>Built for clear reading, not clutter.</span>
+              </article>
+              <article class="auth-metric glass-card">
+                <strong>Revision Ready</strong>
+                <span>Made for quick recall before tests and viva.</span>
+              </article>
+              <article class="auth-metric glass-card">
+                <strong>Student Friendly</strong>
+                <span>Simple flow with professional presentation.</span>
+              </article>
+            </div>
+          </div>
+
+          <div class="auth-panel glass-card">
+            <div class="auth-panel-intro">
+              <p class="auth-panel-label">Student Access</p>
+              <h2>Login and continue your learning workspace.</h2>
+              <p>Secure access to your saved sessions, generated notes, and note history.</p>
+            </div>
+
+            <div class="auth-tabs">
+              <button type="button" id="auth-tab-login" class="auth-tab">Login</button>
+              <button type="button" id="auth-tab-register" class="auth-tab">Register</button>
+            </div>
+
+            <p id="auth-status" class="auth-status">Login to access your student workspace.</p>
+
+            <form id="login-form" class="auth-form">
+              <div class="field-group">
+                <label for="login-mobile">Mobile Number</label>
+                <input id="login-mobile" type="tel" inputmode="numeric" placeholder="+91 9876543210" autocomplete="tel" required />
+              </div>
+
+              <div class="field-group">
+                <label for="login-password">Password</label>
+                <input id="login-password" type="password" placeholder="Enter your password" autocomplete="current-password" required />
+              </div>
+
+              <button type="submit" class="primary-btn" id="login-btn">Login to Workspace</button>
+            </form>
+
+            <form id="register-form" class="auth-form hidden">
+              <div class="field-group">
+                <label for="register-name">Full Name</label>
+                <input id="register-name" type="text" placeholder="Enter your full name" autocomplete="name" required />
+              </div>
+
+              <div class="field-group">
+                <label for="register-mobile">Mobile Number</label>
+                <input id="register-mobile" type="tel" inputmode="numeric" placeholder="+91 9876543210" autocomplete="tel" required />
+              </div>
+
+              <div class="field-group">
+                <label for="register-password">Password</label>
+                <input id="register-password" type="password" placeholder="Minimum 8 characters" autocomplete="new-password" required />
+              </div>
+
+              <div class="field-group">
+                <label for="register-confirm-password">Confirm Password</label>
+                <input id="register-confirm-password" type="password" placeholder="Repeat your password" autocomplete="new-password" required />
+              </div>
+
+              <button type="submit" class="primary-btn" id="register-btn">Create Student Account</button>
+            </form>
+          </div>
+        </div>
+      </article>
+    </section>
+
+
+
+    <section id="secure-app" class="hidden">
+      <section class="hero" data-reveal>
+        <div class="hero-copy">
+          <p class="hero-kicker">Academic Intelligence Workspace</p>
+          <h1>Turn Any Lecture Into <span id="hero-typing-target" class="hero-typing">Exam-Ready Notes</span> in Seconds</h1>
+          <p class="hero-subtext">
+            Convert any lecture into a polished study pack with structured topics, premium section cards,
+            open explanation blocks, key notes, diagrams, quiz checkpoints, translation support, and a clean PDF export.
+          </p>
+
+          <div class="hero-actions">
+            <button type="button" class="primary-btn hero-primary-btn" id="hero-generate-cta">Generate Notes Now</button>
+            <button type="button" class="ghost-btn hero-secondary-btn" id="hero-demo-btn">Watch Demo</button>
+          </div>
+          <p class="hero-trust">Save 70% study time</p>
+
+          <div class="hero-tags">
+            <span>Readable Topic Cards</span>
+            <span>Revision-first Layout</span>
+            <span>Clean Visual Hierarchy</span>
+          </div>
+
+          <div class="hero-stats">
+            <article class="hero-stat glass-card">
+              <strong>Clear explanations</strong>
+              <span>Broken into readable blocks instead of long walls of text.</span>
+            </article>
+            <article class="hero-stat glass-card">
+              <strong>Better self-check</strong>
+              <span>Students can practice with instant feedback quiz options.</span>
+            </article>
+            <article class="hero-stat glass-card">
+              <strong>Export-friendly output</strong>
+              <span>Notes stay organized for reading online or downloading as PDF.</span>
+            </article>
+          </div>
         </div>
 
-        <div class="section">
-          <h2>Table of Contents</h2>
-          <ol id="toc-list" class="toc-list"></ol>
-        </div>
+        <div class="hero-side">
+          <form id="generate-form" class="generate-card glass-card">
+            <div class="generate-head">
+              <p class="section-kicker">New Session</p>
+              <h2>Create a fresh lecture notes workspace</h2>
+            </div>
 
-        <div class="section download-section">
-          <h2>Download Notes</h2>
-          <p class="muted">Generate notes first, then download a PDF copy for offline study.</p>
-          <button type="button" id="download-pdf-secondary" disabled>Download PDF</button>
-        </div>
+            <label for="youtube-url">YouTube lecture URL</label>
+            <div class="generate-row">
+              <input id="youtube-url" type="url" placeholder="https://www.youtube.com/watch?v=..." required />
+              <button id="generate-btn" class="primary-btn" type="submit">Generate Notes</button>
+            </div>
+            <p id="status" class="status">Paste a lecture URL to begin.</p>
+          </form>
 
-        <div class="section">
-          <h2>Topics</h2>
-          <div id="topic-cards" class="topic-grid"></div>
+          <article class="hero-study-map glass-card" data-reveal>
+            <div class="hero-study-copy">
+              <p class="section-kicker">AI Study Flow</p>
+              <h3>From lecture link to a revision-ready learning pack</h3>
+              <p>
+                Every session follows a clean academic pipeline so students can move from watching to revising
+                without losing structure.
+              </p>
+            </div>
+            <div class="hero-study-visual" aria-hidden="true">
+              <svg viewBox="0 0 280 180" fill="none">
+                <rect x="18" y="26" width="94" height="118" rx="20" fill="rgba(212,161,61,0.14)"></rect>
+                <rect x="168" y="42" width="94" height="102" rx="20" fill="rgba(31,75,57,0.14)"></rect>
+                <path d="M58 54C58 48.48 62.48 44 68 44H84C94.5 44 104.41 48.78 110.9 57L118 66L125.1 57C131.59 48.78 141.5 44 152 44H164" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
+                <path d="M116 71V134" stroke="currentColor" stroke-width="5" stroke-linecap="round"></path>
+                <path d="M168 73C178.28 73 186.61 81.33 186.61 91.61C186.61 101.89 178.28 110.22 168 110.22C157.72 110.22 149.39 101.89 149.39 91.61C149.39 81.33 157.72 73 168 73Z" stroke="currentColor" stroke-width="5"></path>
+                <path d="M168 61V49M136 91.61H124M212 91.61H200M192.5 67.11L201.1 58.51M143.5 116.11L134.9 124.71M192.5 116.11L201.1 124.71M143.5 67.11L134.9 58.51" stroke="currentColor" stroke-width="4" stroke-linecap="round"></path>
+                <path d="M67 96H93M67 113H101" stroke="currentColor" stroke-width="4" stroke-linecap="round"></path>
+              </svg>
+            </div>
+            <div class="hero-study-steps">
+              <span>1. Fetch lecture</span>
+              <span>2. Analyze concepts</span>
+              <span>3. Build study notes</span>
+            </div>
+          </article>
+
+          <div class="hero-mini-grid">
+            <article class="hero-mini-card glass-card" data-reveal>
+              <span>Text quality</span>
+              <strong>Explanations, notes, terms, and quiz sections stay cleaner and more readable.</strong>
+            </article>
+            <article class="hero-mini-card glass-card" data-reveal>
+              <span>Student workflow</span>
+              <strong>One place to generate, review, translate, reopen history, and export notes.</strong>
+            </article>
+            <article class="hero-mini-card glass-card" data-reveal>
+              <span>Professional output</span>
+              <strong>Designed to look like a real academic product, not a rough demo page.</strong>
+            </article>
+          </div>
         </div>
       </section>
 
-      <aside class="panel history">
-        <div class="history-header">
-          <h2>History</h2>
-          <button type="button" id="refresh-history">Refresh</button>
+      <section class="dashboard-stats" data-reveal>
+        <article class="metric-card glass-card" data-reveal>
+          <div class="metric-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M4 6.5C4 5.67 4.67 5 5.5 5H10.5C11.76 5 12.96 5.5 13.85 6.39L14 6.54L14.15 6.39C15.04 5.5 16.24 5 17.5 5H18.5C19.33 5 20 5.67 20 6.5V18.5C20 19.05 19.55 19.5 19 19.5H17.5C16.24 19.5 15.04 20 14.15 20.89L14 21.04L13.85 20.89C12.96 20 11.76 19.5 10.5 19.5H5C4.45 19.5 4 19.05 4 18.5V6.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+              <path d="M14 7V20.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div>
+            <p>Total Notes Generated</p>
+            <strong id="stat-total-notes">0</strong>
+            <small>Based on saved sessions</small>
+          </div>
+        </article>
+        <article class="metric-card glass-card" data-reveal>
+          <div class="metric-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.6"/>
+              <path d="M12 8V12L14.5 14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div>
+            <p>Time Saved</p>
+            <strong id="stat-time-saved">0 min</strong>
+            <small>Estimated revision time saved</small>
+          </div>
+        </article>
+        <article class="metric-card glass-card" data-reveal>
+          <div class="metric-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M12 3C8.69 3 6 5.69 6 9C6 10.71 6.72 12.26 7.88 13.35C8.6 14.03 9 14.99 9 16V17.5H15V16C15 14.99 15.4 14.03 16.12 13.35C17.28 12.26 18 10.71 18 9C18 5.69 15.31 3 12 3Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+              <path d="M9.5 20H14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div>
+            <p>Subjects Covered</p>
+            <strong id="stat-subjects-covered">0</strong>
+            <small>Detected from your lecture history</small>
+          </div>
+        </article>
+      </section>
+
+      <section class="workspace-intro" data-reveal>
+        <div class="section-heading">
+          <p class="section-kicker">Structured Workspace</p>
+          <h2>One connected flow for generating, reviewing, and revisiting academic notes.</h2>
+          <p class="workspace-intro-copy">
+            The layout is organized like a real study product: lecture input first, premium notes output next,
+            and learning history beside it for fast reopening and revision.
+          </p>
         </div>
-        <ul id="history-list" class="history-list"></ul>
-      </aside>
-    </main>
+        <div class="workspace-step-strip">
+          <article class="workspace-step glass-card" data-reveal>
+            <strong>Lecture Input</strong>
+            <span>Paste a YouTube lecture URL and start a fresh study session.</span>
+          </article>
+          <article class="workspace-step glass-card" data-reveal>
+            <strong>Notes Output</strong>
+            <span>Get explanation blocks, key concepts, diagrams, and quiz checkpoints.</span>
+          </article>
+          <article class="workspace-step glass-card" data-reveal>
+            <strong>Learning History</strong>
+            <span>Reopen saved sessions, subjects studied, and your latest revision trail.</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="feature-section" data-reveal>
+        <div class="section-heading">
+          <p class="section-kicker">Why StudyKit Pro</p>
+          <h2>Built to feel like a real AI study product, not a plain notes page.</h2>
+        </div>
+        <div class="feature-grid">
+          <article class="feature-card glass-card" data-reveal>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M4 6.5C4 5.67 4.67 5 5.5 5H10.5C11.76 5 12.96 5.5 13.85 6.39L14 6.54L14.15 6.39C15.04 5.5 16.24 5 17.5 5H18.5C19.33 5 20 5.67 20 6.5V18.5C20 19.05 19.55 19.5 19 19.5H17.5C16.24 19.5 15.04 20 14.15 20.89L14 21.04L13.85 20.89C12.96 20 11.76 19.5 10.5 19.5H5C4.45 19.5 4 19.05 4 18.5V6.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"></path>
+                <path d="M14 7V20.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+              </svg>
+            </div>
+            <h3>One-Click Notes</h3>
+            <p>Paste a lecture link and get a structured study workspace in one flow.</p>
+          </article>
+          <article class="feature-card glass-card" data-reveal>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M12 3C8.69 3 6 5.69 6 9C6 10.71 6.72 12.26 7.88 13.35C8.6 14.03 9 14.99 9 16V17.5H15V16C15 14.99 15.4 14.03 16.12 13.35C17.28 12.26 18 10.71 18 9C18 5.69 15.31 3 12 3Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"></path>
+                <path d="M9.5 20H14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                <path d="M10 9.5H14M12 7.5V11.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+              </svg>
+            </div>
+            <h3>AI Summarization</h3>
+            <p>Topic breakdown, explanation flow, key notes, key terms, and revision points.</p>
+          </article>
+          <article class="feature-card glass-card" data-reveal>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M6 7.5C6 6.12 7.12 5 8.5 5H15.5C16.88 5 18 6.12 18 7.5V16.5C18 17.88 16.88 19 15.5 19H8.5C7.12 19 6 17.88 6 16.5V7.5Z" stroke="currentColor" stroke-width="1.6"></path>
+                <path d="M9 9.5H15M9 12H15M9 14.5H12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+              </svg>
+            </div>
+            <h3>Smart Revision</h3>
+            <p>Practice with quiz checkpoints, highlighted concepts, and cleaner reading sections.</p>
+          </article>
+          <article class="feature-card glass-card" data-reveal>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M5 7.5C5 6.12 6.12 5 7.5 5H10.5C11.88 5 13 6.12 13 7.5V10.5C13 11.88 11.88 13 10.5 13H7.5C6.12 13 5 11.88 5 10.5V7.5Z" stroke="currentColor" stroke-width="1.6"></path>
+                <path d="M15 7.5C15 6.12 16.12 5 17.5 5H16.5C17.88 5 19 6.12 19 7.5V8.5C19 9.88 17.88 11 16.5 11H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                <path d="M15 15H19M15 18H19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                <path d="M5 16.5C5 15.12 6.12 14 7.5 14H10.5C11.88 14 13 15.12 13 16.5V17.5C13 18.88 11.88 20 10.5 20H7.5C6.12 20 5 18.88 5 17.5V16.5Z" stroke="currentColor" stroke-width="1.6"></path>
+              </svg>
+            </div>
+            <h3>Personal Dashboard</h3>
+            <p>Track sessions, subjects studied, recent notes, and progress from one workspace.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="future-section" data-reveal>
+        <div class="section-heading">
+          <p class="section-kicker">Coming Soon</p>
+          <h2>Future features that make the product feel bigger and smarter.</h2>
+        </div>
+        <div class="future-grid">
+          <article class="future-card glass-card" data-reveal>
+            <div class="future-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M12 4V15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                <path d="M8.5 8.5C8.5 6.57 10.07 5 12 5C13.93 5 15.5 6.57 15.5 8.5V9.5C15.5 11.43 13.93 13 12 13C10.07 13 8.5 11.43 8.5 9.5V8.5Z" stroke="currentColor" stroke-width="1.6"></path>
+                <path d="M6 11.5C6 14.81 8.69 17.5 12 17.5C15.31 17.5 18 14.81 18 11.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                <path d="M9 20H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+              </svg>
+            </div>
+            <strong>Voice AI Exam</strong>
+            <p>Practice viva and spoken answers with lecture-aware voice prompts.</p>
+          </article>
+          <article class="future-card glass-card" data-reveal>
+            <div class="future-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M5 7.5C5 6.12 6.12 5 7.5 5H16.5C17.88 5 19 6.12 19 7.5V15.5C19 16.88 17.88 18 16.5 18H10L6 21V18H7.5C6.12 18 5 16.88 5 15.5V7.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"></path>
+                <path d="M9 10H15M9 13H13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+              </svg>
+            </div>
+            <strong>Smart Quiz Engine</strong>
+            <p>Adaptive questions based on weak concepts and recently studied topics.</p>
+          </article>
+          <article class="future-card glass-card" data-reveal>
+            <div class="future-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M5 18.5H19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                <path d="M7.5 16V11.5M12 16V8M16.5 16V13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+              </svg>
+            </div>
+            <strong>Performance Tracking</strong>
+            <p>See revision streaks, completion rate, and concept mastery over time.</p>
+          </article>
+        </div>
+      </section>
+
+      <main class="workspace" data-reveal>
+        <section class="panel notes-panel glass-card" data-reveal>
+          <div class="panel-header glass-card">
+            <div class="panel-title-wrap">
+              <p class="section-kicker">Notes Studio</p>
+              <h2>
+                <span class="section-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M4 6.5C4 5.67 4.67 5 5.5 5H10.5C11.76 5 12.96 5.5 13.85 6.39L14 6.54L14.15 6.39C15.04 5.5 16.24 5 17.5 5H18.5C19.33 5 20 5.67 20 6.5V18.5C20 19.05 19.55 19.5 19 19.5H17.5C16.24 19.5 15.04 20 14.15 20.89L14 21.04L13.85 20.89C12.96 20 11.76 19.5 10.5 19.5H5C4.45 19.5 4 19.05 4 18.5V6.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                    <path d="M14 7V20.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                  </svg>
+                </span>
+                Study Notes
+              </h2>
+              <p id="language-status" class="language-status">Showing notes in English.</p>
+            </div>
+            <div class="notes-panel-tools">
+              <div class="language-control">
+                <label for="language-select">Language</label>
+                <select id="language-select" disabled>
+                  <option value="en">English</option>
+                  <option value="hi">Hindi</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="ta">Tamil</option>
+                  <option value="te">Telugu</option>
+                  <option value="bn">Bengali</option>
+                  <option value="ja">Japanese</option>
+                </select>
+              </div>
+              <button type="button" class="ghost-btn" id="download-pdf-btn" disabled>Download PDF</button>
+            </div>
+          </div>
+
+          <article class="video-meta glass-card">
+            <p class="video-meta-label">Current lecture</p>
+            <h3 id="video-title">Paste a lecture link to generate smart notes.</h3>
+            <a id="video-link" href="#" class="disabled-link" target="_blank" rel="noreferrer noopener">Use the generator to start your next study session.</a>
+          </article>
+
+          <section id="notes-empty-state" class="notes-empty-state glass-card">
+            <div class="empty-illustration" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <div class="empty-copy">
+              <p class="section-kicker">Ready When You Are</p>
+              <h3>Paste a lecture link to generate smart notes.</h3>
+              <p>Get clean explanations, structured notes, diagrams, quiz checkpoints, and a polished PDF-ready output.</p>
+            </div>
+            <button type="button" class="primary-btn" id="empty-generate-btn">Generate Notes Now</button>
+          </section>
+
+          <section class="content-block notes-data-block hidden">
+            <div class="block-heading">
+              <p class="section-kicker">Structure</p>
+              <h3>Learning Roadmap</h3>
+            </div>
+            <ol id="toc-list" class="toc-list"></ol>
+          </section>
+
+          <section class="content-block notes-data-block hidden">
+            <div class="block-heading">
+              <p class="section-kicker">Detailed View</p>
+              <h3>Topic Breakdown</h3>
+            </div>
+            <div id="topic-cards" class="topic-cards"></div>
+          </section>
+        </section>
+
+        <aside class="panel history-panel glass-card" data-reveal>
+          <div class="history-header">
+            <div>
+              <p class="section-kicker">History</p>
+              <h2>
+                <span class="section-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M12 8V12L14.5 14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M4.93 4.93A10 10 0 1 1 2 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                    <path d="M2 4V8H6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </span>
+                Your Learning History
+              </h2>
+              <p class="history-panel-subtitle">Track and revisit your generated notes</p>
+            </div>
+            <button type="button" id="refresh-history" class="ghost-btn">Refresh</button>
+          </div>
+
+          <div class="history-controls">
+            <input id="history-search" type="search" placeholder="Search by title, topic, or keyword" />
+            <select id="history-filter">
+              <option value="all">All dates</option>
+              <option value="today">Today</option>
+              <option value="week">This week</option>
+              <option value="month">This month</option>
+              <option value="older">Older</option>
+            </select>
+          </div>
+
+          <div id="history-tags" class="history-tags"></div>
+          <p id="history-count" class="history-count">0 sessions</p>
+          <ul id="history-list" class="history-list"></ul>
+        </aside>
+      </main>
+
+      <section class="contact-section" data-reveal>
+        <article class="contact-card contact-story glass-card" data-reveal>
+          <p class="section-kicker">Contact & Feedback</p>
+          <h2>Help us make the study experience even better.</h2>
+          <p>
+            Share what feels useful, what feels weak, and what should improve next. The feedback area is ready
+            on the frontend so the product already feels complete and professional.
+          </p>
+
+          <div class="contact-points">
+            <div class="contact-point">
+              <strong>Product Feedback</strong>
+              <span>Tell us what should be clearer, faster, or smarter for students.</span>
+            </div>
+            <div class="contact-point">
+              <strong>Study Experience</strong>
+              <span>Suggest changes for notes flow, quiz quality, and reading comfort.</span>
+            </div>
+            <div class="contact-point">
+              <strong>Professional UI</strong>
+              <span>Request polish for layout, typography, interaction, and exporting.</span>
+            </div>
+          </div>
+        </article>
+
+        <form id="feedback-form" class="contact-card feedback-form glass-card" data-reveal>
+          <p class="section-kicker">Send Feedback</p>
+          <div class="feedback-grid">
+            <div class="field-group">
+              <label for="feedback-name">Name</label>
+              <input id="feedback-name" type="text" placeholder="Your name" />
+            </div>
+            <div class="field-group">
+              <label for="feedback-email">Email</label>
+              <input id="feedback-email" type="email" placeholder="Optional email" />
+            </div>
+          </div>
+          <div class="field-group">
+            <label for="feedback-message">Message</label>
+            <textarea id="feedback-message" rows="6" placeholder="Tell us what to improve in the product experience..."></textarea>
+          </div>
+          <button type="submit" class="primary-btn" id="feedback-submit-btn">Save Feedback</button>
+          <p id="feedback-status" class="feedback-status">Your feedback can be captured here without changing backend routes.</p>
+        </form>
+      </section>
+    </section>
   </div>
 
-  <div id="loading" class="loading hidden">
-    <div class="spinner"></div>
-    <p>Analyzing transcript and building your study kit...</p>
+  <div id="demo-modal" class="demo-modal hidden" aria-hidden="true">
+    <div class="demo-backdrop" data-close-demo="true"></div>
+    <div class="demo-dialog glass-card" role="dialog" aria-modal="true" aria-labelledby="demo-title">
+      <button type="button" class="demo-close" id="close-demo-btn" aria-label="Close demo">Close</button>
+      <p class="section-kicker">Quick Demo</p>
+      <h2 id="demo-title">How StudyKit Pro works in three simple steps.</h2>
+      <div class="demo-steps">
+        <article class="demo-step glass-card">
+          <strong>1. Add your lecture link</strong>
+          <p>Paste a YouTube lecture URL and start a fresh note session.</p>
+        </article>
+        <article class="demo-step glass-card">
+          <strong>2. Generate structured notes</strong>
+          <p>Get cleaner explanations, key notes, diagrams, and interactive quiz checkpoints.</p>
+        </article>
+        <article class="demo-step glass-card">
+          <strong>3. Review, translate, and export</strong>
+          <p>Switch language, reopen history, and download a polished PDF for revision.</p>
+        </article>
+      </div>
+    </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <div id="loading" class="loading hidden" role="status" aria-live="polite">
+    <div class="loader"></div>
+    <strong class="loading-title">AI Notes Engine</strong>
+    <p id="loading-step">Preparing your study notes...</p>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-  <script src="script.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="script.js?v=20260322c"></script>
 </body>
 </html>
