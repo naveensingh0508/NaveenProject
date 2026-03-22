@@ -296,7 +296,13 @@ function normalizeErrorMessage(message) {
   const text = String(message || "").trim();
   if (!text) return "Something went wrong.";
 
-  if (/failed to fetch|networkerror|network request failed/i.test(text)) {
+  const lower = text.toLowerCase();
+  if (
+    lower === "failed to fetch" ||
+    lower === "networkerror when attempting to fetch resource." ||
+    lower === "network request failed" ||
+    lower === "load failed"
+  ) {
     return `Unable to connect to backend (${API_BASE}). Start uvicorn and open this page from the same host and port.`;
   }
 
